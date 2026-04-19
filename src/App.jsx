@@ -1,264 +1,239 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { downloadProjectZip } from "./zip";
 
-const storageKey = "prompt2deploy-user";
-
-const initialForm = {
-  email: "",
-  password: "",
-};
-
-const sampleFiles = [
-  { name: "src/", type: "folder" },
-  { name: "App.jsx", type: "file", depth: 1 },
-  { name: "components/", type: "folder", depth: 1 },
-  { name: "PromptPanel.jsx", type: "file", depth: 2 },
-  { name: "OutputPreview.jsx", type: "file", depth: 2 },
-  { name: "public/", type: "folder" },
-  { name: "package.json", type: "file" },
-  { name: "README.md", type: "file" },
+const promptExamples = [
+  "Build a Python CLI todo manager with save/load support and a clean README.",
+  "Create a React landing page for a fitness startup with a pricing section and FAQ.",
+  "Generate a Node.js API starter for notes with CRUD routes and setup instructions.",
 ];
 
 function App() {
-  const [mode, setMode] = useState("login");
-  const [form, setForm] = useState(initialForm);
-  const [message, setMessage] = useState("");
-  const [error, setError] = useState("");
-  const [loading, setLoading] = useState(false);
   const [prompt, setPrompt] = useState("");
-  const [user, setUser] = useState(null);
+  const [project, setProject] = useState(null);
+  const [selectedPath, setSelectedPath] = useState("README.md");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [status, setStatus] = useState({
+    configured: false,
+    missing: [],
+    baseUrl: "",
+    model: null,
+  });
 
   useEffect(() => {
-    const savedUser = window.localStorage.getItem(storageKey);
-    if (savedUser) {
-      setUser(JSON.parse(savedUser));
+    let ignore = false;
+
+    async function loadStatus() {
+      try {
+        const response = await fetch("/api/status");
+        const payload = await response.json();
+
+        if (!ignore) {
+          setStatus(payload);
+        }
+      } catch {
+        if (!ignore) {
+          setStatus({
+            configured: false,
+            missing: ["Backend offline"],
+            baseUrl: "",
+            model: null,
+          });
+        }
+      }
     }
+
+    loadStatus();
+
+    return () => {
+      ignore = true;
+    };
   }, []);
 
-  const handleChange = (event) => {
-    const { name, value } = event.target;
-    setForm((current) => ({ ...current, [name]: value }));
-  };
+  const selectedFile = useMemo(() => {
+    if (!project?.files?.length) {
+      return null;
+    }
 
-  const resetFeedback = () => {
-    setMessage("");
-    setError("");
-  };
+    return project.files.find((file) => file.path === selectedPath) || project.files[0];
+  }, [project, selectedPath]);
 
-  const handleSubmit = async (event) => {
+  async function handleGenerate(event) {
     event.preventDefault();
-    resetFeedback();
+
+    const trimmedPrompt = prompt.trim();
+
+    if (!trimmedPrompt) {
+      setError("Write a prompt first so the backend can shape it into files.");
+      return;
+    }
+
     setLoading(true);
+    setError("");
 
     try {
-      const endpoint = mode === "register" ? "/api/register" : "/api/login";
-      const response = await fetch(endpoint, {
+      const response = await fetch("/api/generate", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify(form),
+        body: JSON.stringify({ prompt: trimmedPrompt }),
       });
 
       const payload = await response.json();
 
       if (!response.ok) {
-        throw new Error(payload.message || "Something went wrong.");
+        throw new Error(payload.message || "Generation failed.");
       }
 
-      if (mode === "register") {
-        setMessage("Registration complete. You can sign in now.");
-        setMode("login");
-        setForm(initialForm);
-      } else {
-        window.localStorage.setItem(storageKey, JSON.stringify(payload.user));
-        setUser(payload.user);
-        setForm(initialForm);
-      }
-    } catch (submitError) {
-      setError(submitError.message);
+      setProject(payload);
+      setSelectedPath(
+        payload.files.find((file) => file.path === "README.md")?.path || payload.files[0]?.path || "",
+      );
+    } catch (requestError) {
+      setError(requestError.message);
     } finally {
       setLoading(false);
     }
-  };
-
-  const handleLogout = () => {
-    window.localStorage.removeItem(storageKey);
-    setUser(null);
-    setPrompt("");
-    resetFeedback();
-    setMode("login");
-  };
-
-  if (user) {
-    return (
-      <main className="workspace-shell">
-        <section className="workspace-topbar">
-          <div>
-            <p className="eyebrow">Signed in</p>
-            <h1>prompt2deploy</h1>
-            <p className="subtle">Welcome back, {user.email}</p>
-          </div>
-          <button className="ghost-button" onClick={handleLogout}>
-            Logout
-          </button>
-        </section>
-
-        <section className="workspace-grid">
-          <div className="panel panel-prompt">
-            <div className="panel-header">
-              <div>
-                <p className="eyebrow">Prompt input</p>
-                <h2>Describe the project you want to generate</h2>
-              </div>
-              <span className="pill">Next step ready</span>
-            </div>
-
-            <textarea
-              className="prompt-box"
-              placeholder="Example: Build a SaaS landing page with dashboard, auth, and billing settings..."
-              value={prompt}
-              onChange={(event) => setPrompt(event.target.value)}
-            />
-
-            <div className="prompt-footer">
-              <p>
-                Prompt collection is wired in now. File generation can be added on
-                top of this flow next.
-              </p>
-              <button className="primary-button" type="button">
-                Generate Files Later
-              </button>
-            </div>
-          </div>
-
-          <div className="panel panel-files">
-            <div className="panel-header">
-              <div>
-                <p className="eyebrow">Project structure</p>
-                <h2>Generated files preview</h2>
-              </div>
-            </div>
-
-            <div className="file-tree">
-              {sampleFiles.map((item) => (
-                <div
-                  className={`file-row ${item.type}`}
-                  key={`${item.name}-${item.depth ?? 0}`}
-                  style={{ paddingLeft: `${(item.depth ?? 0) * 20 + 16}px` }}
-                >
-                  <span className="file-icon">
-                    {item.type === "folder" ? ">" : "-"}
-                  </span>
-                  <span>{item.name}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        </section>
-      </main>
-    );
   }
 
   return (
-    <main className="auth-shell">
-      <section className="hero-panel">
-        <p className="badge">AI project launcher</p>
-        <h1>prompt2deploy</h1>
-        <p className="hero-copy">
-          Sign in to start shaping prompts into structured project outputs. New
-          users need to register once before their first login.
-        </p>
+    <main className="app-shell">
+      <section className="hero-card">
+        <div className="hero-copy">
+          <p className="eyebrow">Server-side AI project generator</p>
+          <h1>prompt2deploy</h1>
+          <p className="lead">
+            Paste a prompt, let the backend shape it for the model, preview the files,
+            then download the generated project as a zip.
+          </p>
+        </div>
 
-        <div className="feature-grid">
-          <article>
-            <h3>Secure access</h3>
-            <p>Passwords are hashed in the backend before they are saved.</p>
-          </article>
-          <article>
-            <h3>Fluid workflow</h3>
-            <p>A responsive two-stage experience for auth and prompt entry.</p>
-          </article>
-          <article>
-            <h3>Project-ready</h3>
-            <p>The next page already includes a structured file-output panel.</p>
-          </article>
+        <div className="status-strip">
+          <div className={`status-badge ${status.configured ? "online" : "offline"}`}>
+            {status.configured ? "AI backend ready" : "Backend setup needed"}
+          </div>
+          <p>
+            Model: <strong>{status.model || "Not configured yet"}</strong>
+          </p>
+          <p className="muted">
+            The API key stays on the server. Users only send prompts.
+          </p>
         </div>
       </section>
 
-      <section className="auth-panel">
-        <div className="auth-card">
-          <div className="tabs">
-            <button
-              className={mode === "login" ? "tab active" : "tab"}
-              onClick={() => {
-                setMode("login");
-                resetFeedback();
-              }}
-              type="button"
-            >
-              Sign in
-            </button>
-            <button
-              className={mode === "register" ? "tab active" : "tab"}
-              onClick={() => {
-                setMode("register");
-                resetFeedback();
-              }}
-              type="button"
-            >
-              Register
-            </button>
+      <section className="workspace-grid">
+        <form className="panel composer-panel" onSubmit={handleGenerate}>
+          <div className="panel-header">
+            <div>
+              <p className="eyebrow">Prompt</p>
+              <h2>Describe what should be generated</h2>
+            </div>
+            <span className="capsule">Backend adds structure</span>
           </div>
 
-          <div className="auth-copy">
-            <p className="eyebrow">
-              {mode === "register" ? "Create your account" : "Welcome back"}
-            </p>
-            <h2>
-              {mode === "register"
-                ? "Register before first sign in"
-                : "Login with email and password"}
-            </h2>
+          <textarea
+            className="prompt-box"
+            placeholder="Example: create a Python app that takes a CSV file and prints a summary report, with README and requirements if needed."
+            value={prompt}
+            onChange={(event) => setPrompt(event.target.value)}
+          />
+
+          <div className="example-row">
+            {promptExamples.map((example) => (
+              <button
+                className="example-chip"
+                key={example}
+                onClick={() => setPrompt(example)}
+                type="button"
+              >
+                {example}
+              </button>
+            ))}
           </div>
 
-          <form className="auth-form" onSubmit={handleSubmit}>
-            <label>
-              Email
-              <input
-                name="email"
-                type="email"
-                placeholder="you@example.com"
-                value={form.email}
-                onChange={handleChange}
-                required
-              />
-            </label>
+          {!status.configured ? (
+            <div className="callout warning">
+              <strong>Backend configuration is incomplete.</strong>
+              <p>
+                Add <code>AI_API_KEY</code> and <code>AI_MODEL</code> in your backend
+                environment, then restart the server.
+              </p>
+              {status.missing?.length ? (
+                <p className="muted">Missing: {status.missing.join(", ")}</p>
+              ) : null}
+            </div>
+          ) : null}
 
-            <label>
-              Password
-              <input
-                name="password"
-                type="password"
-                placeholder="Enter your password"
-                value={form.password}
-                onChange={handleChange}
-                required
-                minLength={6}
-              />
-            </label>
+          {error ? (
+            <div className="callout error">
+              <strong>Generation failed.</strong>
+              <p>{error}</p>
+            </div>
+          ) : null}
 
-            {message ? <p className="feedback success">{message}</p> : null}
-            {error ? <p className="feedback error">{error}</p> : null}
-
+          <div className="action-row">
             <button className="primary-button" disabled={loading} type="submit">
-              {loading
-                ? "Please wait..."
-                : mode === "register"
-                  ? "Create account"
-                  : "Sign in"}
+              {loading ? "Generating project..." : "Generate project"}
             </button>
-          </form>
-        </div>
+            {project ? (
+              <button
+                className="ghost-button"
+                onClick={() => downloadProjectZip(project)}
+                type="button"
+              >
+                Download zip
+              </button>
+            ) : null}
+          </div>
+        </form>
+
+        <section className="panel preview-panel">
+          <div className="panel-header">
+            <div>
+              <p className="eyebrow">Preview</p>
+              <h2>{project ? project.projectName : "Generated files will appear here"}</h2>
+            </div>
+            {project ? <span className="capsule">{project.files.length} files</span> : null}
+          </div>
+
+          {project ? (
+            <>
+              <p className="summary">{project.summary}</p>
+
+              <div className="preview-grid">
+                <div className="file-list">
+                  {project.files.map((file) => (
+                    <button
+                      className={selectedFile?.path === file.path ? "file-pill active" : "file-pill"}
+                      key={file.path}
+                      onClick={() => setSelectedPath(file.path)}
+                      type="button"
+                    >
+                      {file.path}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="file-viewer">
+                  <div className="viewer-topbar">
+                    <span>{selectedFile?.path}</span>
+                    <span>{selectedFile?.content.length || 0} chars</span>
+                  </div>
+                  <pre>{selectedFile?.content || ""}</pre>
+                </div>
+              </div>
+            </>
+          ) : (
+            <div className="empty-state">
+              <p className="empty-kicker">No project generated yet</p>
+              <p>
+                Once you send a prompt, the backend will guide the model into a strict JSON
+                file bundle, then this panel will show the files before download.
+              </p>
+            </div>
+          )}
+        </section>
       </section>
     </main>
   );

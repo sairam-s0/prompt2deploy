@@ -3,5 +3,10 @@
     "email": "sarveshjrgar@gmail.com",
     "passwordHash": "$2a$10$1U9Lx3rGNPku4dRu2xXYo.sLqU6..tWBxQNI/hr7b89VDlJNPYSaC",
     "createdAt": "2026-04-19T06:51:36.040Z"
+  },
+  {
+    "email": "sai@gmail.com",
+    "passwordHash": "$2a$10$cK/nP28FR.GiEwoSG.wc.OiwYOAgjiwthybJqDATn571d1Vef85K6",
+    "createdAt": "2026-04-19T07:37:17.591Z"
   }
 ]
